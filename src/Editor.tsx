@@ -1,13 +1,12 @@
-/* eslint-disable jsx-a11y/click-events-have-key-events */
-/* eslint-disable jsx-a11y/no-static-element-interactions */
 import { DownloadIcon, EyeIcon, ViewBoardsIcon } from '@heroicons/react/outline'
-import { useCallback, useEffect, useState, useRef, useMemo } from 'react'
+import { useCallback, useEffect, useState, useRef } from 'react'
 import { useWindowSize } from 'react-use'
 import inpaint from './adapters/inpainting'
 import superResolution from './adapters/superResolution'
 import Button from './components/Button'
+import ExportModal from './components/ExportModal'
 import Slider from './components/Slider'
-import { downloadImage, loadImage, useImage } from './utils'
+import { loadImage, useImage } from './utils'
 import Progress from './components/Progress'
 import { modelExists, downloadModel } from './adapters/cache'
 import Modal from './components/Modal'
@@ -15,6 +14,7 @@ import * as m from './paraglide/messages'
 
 interface EditorProps {
   file: File
+  onError?: (message: string) => void
 }
 
 interface Line {
@@ -26,7 +26,7 @@ interface Line {
 function drawLines(
   ctx: CanvasRenderingContext2D,
   lines: Line[],
-  color = 'rgba(255, 0, 0, 0.5)'
+  color = 'rgba(129, 140, 248, 0.5)'
 ) {
   ctx.strokeStyle = color
   ctx.lineCap = 'round'
@@ -46,7 +46,7 @@ function drawLines(
 
 const BRUSH_HIDE_ON_SLIDER_CHANGE_TIMEOUT = 2000
 export default function Editor(props: EditorProps) {
-  const { file } = props
+  const { file, onError } = props
   const [brushSize, setBrushSize] = useState(40)
   const [original, isOriginalLoaded] = useImage(file)
   const [renders, setRenders] = useState<HTMLImageElement[]>([])
@@ -68,10 +68,10 @@ export default function Editor(props: EditorProps) {
   const [separatorLeft, setSeparatorLeft] = useState(0)
   const historyListRef = useRef<HTMLDivElement>(null)
   const isBrushSizeChange = useRef<boolean>(false)
-  const scaledBrushSize = useMemo(() => brushSize, [brushSize])
   const canvasDiv = useRef<HTMLDivElement>(null)
   const [downloaded, setDownloaded] = useState(true)
   const [downloadProgress, setDownloadProgress] = useState(0)
+  const [showExport, setShowExport] = useState(false)
   const windowSize = useWindowSize()
 
   const draw = useCallback(
@@ -84,23 +84,20 @@ export default function Editor(props: EditorProps) {
         renders[index === -1 ? renders.length - 1 : index] ?? original
       const { canvas } = context
 
-      const divWidth = canvasDiv.current!.offsetWidth
-      const divHeight = canvasDiv.current!.offsetHeight
+      if (!canvasDiv.current) return
+      const divWidth = canvasDiv.current.offsetWidth
+      const divHeight = canvasDiv.current.offsetHeight
 
-      // 计算宽高比
       const imgAspectRatio = currRender.width / currRender.height
       const divAspectRatio = divWidth / divHeight
 
       let canvasWidth
       let canvasHeight
 
-      // 比较宽高比以决定如何缩放
       if (divAspectRatio > imgAspectRatio) {
-        // div 较宽，基于高度缩放
         canvasHeight = divHeight
         canvasWidth = currRender.width * (divHeight / currRender.height)
       } else {
-        // div 较窄，基于宽度缩放
         canvasWidth = divWidth
         canvasHeight = currRender.height * (divWidth / currRender.width)
       }
@@ -129,7 +126,6 @@ export default function Editor(props: EditorProps) {
     if (!ctx) {
       throw new Error('could not retrieve mask canvas')
     }
-    // Just need the finishing touch
     const line = lines.slice(-1)[0]
     if (line) drawLines(ctx, [line], 'white')
   }, [context?.canvas.height, context?.canvas.width, lines, maskCanvas])
@@ -152,8 +148,8 @@ export default function Editor(props: EditorProps) {
     }
     const onMouseMove = (ev: MouseEvent) => {
       if (brushRef.current) {
-        const x = ev.pageX - scaledBrushSize / 2
-        const y = ev.pageY - scaledBrushSize / 2
+        const x = ev.pageX - brushSize / 2
+        const y = ev.pageY - brushSize / 2
 
         brushRef.current.style.transform = `translate3d(${x}px, ${y}px, 0)`
       }
@@ -182,30 +178,26 @@ export default function Editor(props: EditorProps) {
       refreshCanvasMask()
       try {
         const start = Date.now()
+        // eslint-disable-next-line no-console
         console.log('inpaint_start')
-        // each time based on the last result, the first is the original
         const newFile = renders.slice(-1)[0] ?? file
         const res = await inpaint(newFile, maskCanvas.toDataURL())
         if (!res) {
           throw new Error('empty response')
         }
-        // TODO: fix the render if it failed loading
         const newRender = new Image()
         newRender.dataset.id = Date.now().toString()
         await loadImage(newRender, res)
-        renders.push(newRender)
-        lines.push({ pts: [], src: '' } as Line)
-        setRenders([...renders])
-        setLines([...lines])
+        setRenders(prev => [...prev, newRender])
+        setLines(prev => [...prev, { pts: [], src: '' } as Line])
+        // eslint-disable-next-line no-console
         console.log('inpaint_processed', {
           duration: Date.now() - start,
         })
       } catch (e: any) {
-        console.log('inpaint_failed', {
-          error: e,
-        })
-        // eslint-disable-next-line
-        alert(e.message ? e.message : e.toString())
+        // eslint-disable-next-line no-console
+        console.log('inpaint_failed', { error: e })
+        onError?.(e.message || e.toString())
       }
       if (historyListRef.current) {
         const { scrollWidth, clientWidth } = historyListRef.current
@@ -221,6 +213,7 @@ export default function Editor(props: EditorProps) {
     const onTouchMove = (ev: TouchEvent) => {
       ev.preventDefault()
       ev.stopPropagation()
+      if (ev.touches.length === 0) return
       const currLine = lines[lines.length - 1]
       const coords = canvas.getBoundingClientRect()
       currLine.pts.push({
@@ -237,7 +230,6 @@ export default function Editor(props: EditorProps) {
       currLine.size = brushSize
       canvas.addEventListener('mousemove', onMouseDrag)
       canvas.addEventListener('mouseup', onPointerUp)
-      // onPaint(e)
     }
 
     canvas.addEventListener('touchstart', onPointerStart)
@@ -273,6 +265,8 @@ export default function Editor(props: EditorProps) {
     renders,
     showOriginal,
     hideBrushTimeout,
+    onloading,
+    onError,
   ])
 
   useEffect(() => {
@@ -312,104 +306,102 @@ export default function Editor(props: EditorProps) {
       separator.removeEventListener('mousedown', separatorDown)
       window.removeEventListener('mouseup', separatorUp)
     }
-  }, [separator, context])
+  }, [separator, context, originalImg])
 
   function download() {
-    const currRender = renders.at(-1) ?? original
-    downloadImage(currRender.currentSrc, 'IMG')
+    setShowExport(true)
   }
 
-  const undo = useCallback(async () => {
-    const l = lines
-    l.pop()
-    l.pop()
-    setLines([...l, { pts: [], src: '' }])
-    const r = renders
-    r.pop()
-    setRenders([...r])
-  }, [lines, renders])
+  function getExportSource(): HTMLCanvasElement | HTMLImageElement {
+    if (!context) return original
+    // Return the current canvas (which has the latest render + brush strokes)
+    return context.canvas
+  }
 
+  function getExportFilename(): string {
+    const timestamp = new Date().toISOString().slice(0, 19).replace(/[:-]/g, '')
+    return `inpaint-${timestamp}.png`
+  }
+
+  const undo = useCallback(() => {
+    setLines(prev => {
+      const next = prev.slice(0, -2)
+      return [...next, { pts: [], src: '' }]
+    })
+    setRenders(prev => prev.slice(0, -1))
+  }, [])
+
+  // Keyboard shortcuts
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
-      if (!renders.length) {
+      // Ctrl+Z / Cmd+Z — undo
+      if ((event.metaKey || event.ctrlKey) && event.key === 'z') {
+        if (renders.length > 0) {
+          event.preventDefault()
+          undo()
+        }
         return
       }
-      const isCmdZ = (event.metaKey || event.ctrlKey) && event.key === 'z'
-      if (isCmdZ) {
+      // Ctrl+S / Cmd+S — download
+      if ((event.metaKey || event.ctrlKey) && event.key === 's') {
         event.preventDefault()
-        undo()
+        download()
+        return
+      }
+      // [ / ] — brush size
+      if (event.key === '[') {
+        event.preventDefault()
+        setBrushSize(prev => Math.max(10, prev - 10))
+        return
+      }
+      if (event.key === ']') {
+        event.preventDefault()
+        setBrushSize(prev => Math.min(200, prev + 10))
+        return
+      }
+      // Escape — toggle show original off
+      if (event.key === 'Escape' && showOriginal) {
+        event.preventDefault()
+        setShowOriginal(false)
+        setTimeout(() => setSeparatorLeft(0), 300)
       }
     }
     window.addEventListener('keydown', handler)
     return () => {
       window.removeEventListener('keydown', handler)
     }
-  }, [renders, undo])
+  }, [renders, undo, showOriginal, download])
 
-  const backTo = useCallback(
-    (index: number) => {
-      lines.splice(index + 1)
-      setLines([...lines, { pts: [], src: '' }])
-      renders.splice(index + 1)
-      setRenders([...renders])
-    },
-    [renders, lines]
-  )
+  const backTo = useCallback((index: number) => {
+    setLines(prev => [...prev.slice(0, index + 1), { pts: [], src: '' }])
+    setRenders(prev => prev.slice(0, index + 1))
+  }, [])
 
-  const History = useMemo(
-    () =>
-      renders.map((render, index) => {
-        return (
-          <div
-            key={render.dataset.id}
-            style={{
-              position: 'relative',
-              display: 'inline-block',
-              flexShrink: 0,
-            }}
-          >
-            <img
-              src={render.src}
-              alt="render"
-              className="rounded-sm"
-              style={{
-                height: '90px',
-              }}
-            />
-            <Button
-              className="hover:opacity-100 opacity-0 cursor-pointer rounded-sm"
-              style={{
-                position: 'absolute',
-                top: '0',
-                left: '0',
-                width: '100%',
-                height: '100%',
-                backgroundColor: 'rgba(0, 0, 0, 0.5)',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-              onClick={() => backTo(index)}
-              onEnter={() => draw(index)}
-              onLeave={draw}
-            >
-              <div
-                style={{
-                  color: '#fff',
-                  fontSize: '12px',
-                  textAlign: 'center',
-                }}
-              >
-                回到这
-                <br />
-                Back here
-              </div>
-            </Button>
+  const History = renders.map((render, index) => {
+    return (
+      <div
+        key={render.dataset.id}
+        className="relative inline-block flex-shrink-0 group rounded-lg overflow-hidden"
+      >
+        <img
+          src={render.src}
+          alt="render"
+          className="rounded-lg transition-transform duration-200 group-hover:scale-105"
+          style={{ height: '96px' }}
+        />
+        <Button
+          className="absolute inset-0 flex items-center justify-center bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-200 cursor-pointer rounded-lg"
+          onClick={() => backTo(index)}
+          onEnter={() => draw(index)}
+          onLeave={draw}
+        >
+          <div className="text-white text-xs text-center font-medium">
+            {m.back_to_this()}
           </div>
-        )
-      }),
-    [renders, backTo]
-  )
+        </Button>
+      </div>
+    )
+  })
 
   const handleSliderStart = () => {
     setShowBrush(true)
@@ -419,8 +411,8 @@ export default function Editor(props: EditorProps) {
       isBrushSizeChange.current = true
     }
     if (brushRef.current) {
-      const x = document.documentElement.clientWidth / 2 - scaledBrushSize / 2
-      const y = document.documentElement.clientHeight / 2 - scaledBrushSize / 2
+      const x = document.documentElement.clientWidth / 2 - brushSize / 2
+      const y = document.documentElement.clientHeight / 2 - brushSize / 2
 
       brushRef.current.style.transform = `translate3d(${x}px, ${y}px, 0)`
     }
@@ -440,8 +432,6 @@ export default function Editor(props: EditorProps) {
       setGenerateProgress(p => {
         if (p < 90) return p + 10 * Math.random()
         if (p >= 90 && p < 99) return p + 1 * Math.random()
-        // Do not hide the progress bar after 99%,cause sometimes long time progress
-        // window.setTimeout(() => setIsInpaintingLoading(false), 500)
         return p
       })
     }, 1000)
@@ -455,41 +445,44 @@ export default function Editor(props: EditorProps) {
   }, [])
 
   const onSuperResolution = useCallback(async () => {
-    if (!(await modelExists('superResolution'))) {
-      setDownloaded(false)
-      await downloadModel('superResolution', setDownloadProgress)
+    try {
+      if (!(await modelExists('superResolution'))) {
+        setDownloaded(false)
+        await downloadModel('superResolution', setDownloadProgress)
+        setDownloaded(true)
+      }
+    } catch (err: any) {
+      onError?.(err.message || m.download_failed())
       setDownloaded(true)
+      return
     }
     setIsProcessingLoading(true)
     try {
-      // 运行
       const start = Date.now()
+      // eslint-disable-next-line no-console
       console.log('superResolution_start')
-      // each time based on the last result, the first is the original
       const newFile = renders.at(-1) ?? file
       const res = await superResolution(newFile, setGenerateProgress)
       if (!res) {
         throw new Error('empty response')
       }
-      // TODO: fix the render if it failed loading
       const newRender = new Image()
       newRender.dataset.id = Date.now().toString()
       await loadImage(newRender, res)
-      renders.push(newRender)
-      lines.push({ pts: [], src: '' } as Line)
-      setRenders([...renders])
-      setLines([...lines])
+      setRenders(prev => [...prev, newRender])
+      setLines(prev => [...prev, { pts: [], src: '' } as Line])
+      // eslint-disable-next-line no-console
       console.log('superResolution_processed', {
         duration: Date.now() - start,
       })
-
-      // 替换当前图片
-    } catch (error) {
+    } catch (error: any) {
+      // eslint-disable-next-line no-console
       console.error('superResolution', error)
+      onError?.(error.message || 'Super resolution failed')
     } finally {
       setIsProcessingLoading(false)
     }
-  }, [file, lines, original.naturalHeight, original.naturalWidth, renders])
+  }, [file, renders, onError])
 
   return (
     <div
@@ -499,37 +492,31 @@ export default function Editor(props: EditorProps) {
       ].join(' ')}
     >
       {/* History */}
+      {renders.length > 0 && (
+        <div
+          ref={historyListRef}
+          style={{ height: '120px' }}
+          className={[
+            'flex-shrink-0',
+            'mt-4 p-3 rounded-xl',
+            'flex items-center w-full max-w-4xl',
+            'flex-row gap-4',
+            'scrollbar-thin overflow-x-auto',
+            'glass',
+          ].join(' ')}
+        >
+          {History}
+        </div>
+      )}
+      {/* Canvas */}
       <div
-        ref={historyListRef}
-        style={{
-          height: '116px',
-        }}
-        className={[
-          'flex-shrink-0',
-          'mt-4 border p-3 rounded',
-          'flex items-left w-full max-w-4xl',
-          'space-y-0 flex-row space-x-5',
-          'scrollbar-thin scrollbar-thumb-black scrollbar-track-primary overflow-x-scroll',
-        ].join(' ')}
-      >
-        {History}
-      </div>
-      {/* 画图 */}
-      <div
-        className={[
-          'flex-grow',
-          'flex justify-center',
-          'my-2',
-          'relative',
-        ].join(' ')}
-        style={{
-          width: '70vw',
-        }}
+        className="flex-grow flex justify-center my-2 relative"
+        style={{ width: '75vw' }}
         ref={canvasDiv}
       >
         <div className="relative">
           <canvas
-            className="rounded-sm"
+            className="rounded-lg shadow-2xl shadow-black/50"
             style={showBrush ? { cursor: 'none' } : {}}
             ref={r => {
               if (r && !context) {
@@ -561,7 +548,7 @@ export default function Editor(props: EditorProps) {
             <div
               className={[
                 'absolute top-0 right-0 pointer-events-none z-10',
-                useSeparator ? 'bg-black text-white' : 'bg-primary ',
+                useSeparator ? 'bg-surface text-white' : 'bg-primary-400',
                 'w-1',
                 'flex items-center justify-center',
                 'separator',
@@ -574,13 +561,13 @@ export default function Editor(props: EditorProps) {
                 transitionDuration: '300ms',
               }}
             >
-              <span className="absolute left-1 bottom-0 p-1 bg-opacity-25 bg-black rounded text-white select-none">
-                original
+              <span className="absolute left-1 bottom-0 p-1 bg-black/40 backdrop-blur-sm rounded-md text-white text-xs font-medium select-none">
+                {m.original()}
               </span>
               <div
                 className={[
                   'absolute py-2 px-1 rounded-md pointer-events-auto',
-                  useSeparator ? 'bg-black' : 'bg-primary ',
+                  useSeparator ? 'bg-surface' : 'bg-primary-400',
                 ].join(' ')}
                 style={{ cursor: 'ew-resize' }}
                 ref={r => {
@@ -610,10 +597,12 @@ export default function Editor(props: EditorProps) {
             />
           </div>
           {isInpaintingLoading && (
-            <div className="z-10 bg-white absolute bg-opacity-80 top-0 left-0 right-0 bottom-0  h-full w-full flex justify-center items-center">
-              <div ref={modalRef} className="text-xl space-y-5 w-4/5 sm:w-1/2">
-                <p>正在处理中，请耐心等待。。。</p>
-                <p>It is being processed, please be patient...</p>
+            <div className="z-10 absolute inset-0 bg-surface/80 backdrop-blur-sm flex justify-center items-center animate-fade-in">
+              <div
+                ref={modalRef}
+                className="text-lg space-y-4 w-4/5 sm:w-1/2 text-center"
+              >
+                <p>{m.processing_message()}</p>
                 <Progress percent={generateProgress} />
               </div>
             </div>
@@ -623,7 +612,7 @@ export default function Editor(props: EditorProps) {
 
       {!downloaded && (
         <Modal>
-          <div className="text-xl space-y-5">
+          <div className="text-lg space-y-4">
             <p>{m.upscaleing_model_download_message()}</p>
             <Progress percent={downloadProgress} />
           </div>
@@ -631,28 +620,30 @@ export default function Editor(props: EditorProps) {
       )}
       {showBrush && (
         <div
-          className="fixed rounded-full bg-red-500 bg-opacity-50 pointer-events-none left-0 top-0"
+          className="fixed rounded-full pointer-events-none left-0 top-0 border-2 border-primary-400/70 bg-primary-400/10 transition-[width,height] duration-100"
           style={{
-            width: `${scaledBrushSize}px`,
-            height: `${scaledBrushSize}px`,
+            width: `${brushSize}px`,
+            height: `${brushSize}px`,
             transform: `translate3d(-100px, -100px, 0)`,
           }}
           ref={brushRef}
         />
       )}
-      {/* 工具栏 */}
+      {/* Toolbar */}
       <div
         className={[
           'flex-shrink-0',
-          'bg-white rounded-md border border-gray-300 hover:border-gray-400 shadow-md hover:shadow-lg p-4 transition duration-200 ease-in-out',
-          'flex items-center w-full max-w-4xl py-6 mb-4, justify-between',
-          'flex-col space-y-2 sm:space-y-0 sm:flex-row sm:space-x-5',
+          'glass rounded-2xl p-4',
+          'flex items-center w-full max-w-4xl py-4 mb-4 justify-between',
+          'flex-col gap-2 sm:gap-4 sm:flex-row',
+          'animate-slide-up',
         ].join(' ')}
       >
         {renders.length > 0 && (
           <Button
             primary
             onClick={undo}
+            title={`${m.undo()} (Ctrl+Z)`}
             icon={
               <svg
                 className="w-6 h-6"
@@ -683,6 +674,7 @@ export default function Editor(props: EditorProps) {
         <Button
           primary={showOriginal}
           icon={<EyeIcon className="w-6 h-6" />}
+          title={`${m.original()} (Esc)`}
           onUp={() => {
             setShowOriginal(!showOriginal)
             setTimeout(() => setSeparatorLeft(0), 300)
@@ -697,11 +689,20 @@ export default function Editor(props: EditorProps) {
         <Button
           primary
           icon={<DownloadIcon className="w-6 h-6" />}
+          title={`${m.download()} (Ctrl+S)`}
           onClick={download}
         >
           {m.download()}
         </Button>
       </div>
+
+      {showExport && (
+        <ExportModal
+          source={getExportSource()}
+          filename={getExportFilename()}
+          onClose={() => setShowExport(false)}
+        />
+      )}
     </div>
   )
 }

@@ -1,95 +1,107 @@
-import localforage from 'localforage'
-
 export type modelType = 'inpaint' | 'superResolution'
 
-localforage.config({
-  name: 'modelCache',
-})
-
-export async function saveModel(modelType: modelType, modelBlob: ArrayBuffer) {
-  await localforage.setItem(getModel(modelType).name, modelBlob)
+interface ModelInfo {
+  name: string
+  url: string
+  backupUrl: string
 }
 
-function getModel(modelType: modelType) {
+function getModel(modelType: modelType): ModelInfo {
   if (modelType === 'inpaint') {
-    const modelList = [
-      {
-        name: 'model',
-        url: 'https://huggingface.co/lxfater/inpaint-web/resolve/main/migan.onnx',
-        backupUrl: '',
-      },
-      {
-        name: 'model-perf',
-        url: 'https://huggingface.co/andraniksargsyan/migan/resolve/main/migan.onnx',
-        backupUrl: '',
-      },
-      {
-        name: 'migan-pipeline-v2',
-        url: 'https://huggingface.co/andraniksargsyan/migan/resolve/main/migan_pipeline_v2.onnx',
-        backupUrl:
-          'https://worker-share-proxy-01f5.lxfater.workers.dev/andraniksargsyan/migan/resolve/main/migan_pipeline_v2.onnx',
-      },
-    ]
-    const currentModel = modelList[2]
-    return currentModel
+    return {
+      name: 'migan-pipeline-v2.onnx',
+      url: 'https://huggingface.co/andraniksargsyan/migan/resolve/main/migan_pipeline_v2.onnx',
+      backupUrl:
+        'https://worker-share-proxy-01f5.lxfater.workers.dev/andraniksargsyan/migan/resolve/main/migan_pipeline_v2.onnx',
+    }
   }
   if (modelType === 'superResolution') {
-    const modelList = [
-      {
-        name: 'realesrgan-x4',
-        url: 'https://huggingface.co/lxfater/inpaint-web/resolve/main/realesrgan-x4.onnx',
-        backupUrl:
-          'https://worker-share-proxy-01f5.lxfater.workers.dev/lxfater/inpaint-web/resolve/main/realesrgan-x4.onnx',
-      },
-    ]
-    const currentModel = modelList[0]
-    return currentModel
+    return {
+      name: 'realesrgan-x4.onnx',
+      url: 'https://huggingface.co/lxfater/inpaint-web/resolve/main/realesrgan-x4.onnx',
+      backupUrl:
+        'https://worker-share-proxy-01f5.lxfater.workers.dev/lxfater/inpaint-web/resolve/main/realesrgan-x4.onnx',
+    }
   }
   throw new Error('wrong modelType')
 }
 
-export async function loadModel(modelType: modelType): Promise<ArrayBuffer> {
-  const model = (await localforage.getItem(
-    getModel(modelType).name
-  )) as ArrayBuffer
-  return model
+async function getModelsDir(): Promise<FileSystemDirectoryHandle> {
+  const root = await navigator.storage.getDirectory()
+  return root.getDirectoryHandle('models', { create: true })
 }
 
-export async function modelExists(modelType: modelType) {
+export async function saveModel(
+  modelType: modelType,
+  data: ArrayBuffer | Uint8Array
+) {
+  const dir = await getModelsDir()
+  const fileHandle = await dir.getFileHandle(getModel(modelType).name, {
+    create: true,
+  })
+  const writable = await fileHandle.createWritable()
+  await writable.write(data)
+  await writable.close()
+}
+
+export async function loadModel(
+  modelType: modelType
+): Promise<ArrayBuffer | null> {
+  try {
+    const dir = await getModelsDir()
+    const fileHandle = await dir.getFileHandle(getModel(modelType).name)
+    const file = await fileHandle.getFile()
+    return await file.arrayBuffer()
+  } catch {
+    return null
+  }
+}
+
+export async function modelExists(modelType: modelType): Promise<boolean> {
   const model = await loadModel(modelType)
-  return model !== null && model !== undefined
+  return model !== null && model.byteLength > 0
 }
 
-export async function ensureModel(modelType: modelType) {
-  if (await modelExists(modelType)) {
-    return loadModel(modelType)
+export async function ensureModel(modelType: modelType): Promise<ArrayBuffer> {
+  const cached = await loadModel(modelType)
+  if (cached) {
+    return cached
   }
   const model = getModel(modelType)
   const response = await fetch(model.url)
   const buffer = await response.arrayBuffer()
-  await saveModel(modelType, buffer)
+  await saveModel(modelType, new Uint8Array(buffer))
   return buffer
 }
 
 export async function downloadModel(
   modelType: modelType,
-  setDownloadProgress: (arg0: number) => void
-) {
+  setDownloadProgress: (progress: number) => void
+): Promise<void> {
   if (await modelExists(modelType)) {
+    setDownloadProgress(100)
     return
   }
 
-  async function downloadFromUrl(url: string) {
+  async function downloadFromUrl(url: string): Promise<void> {
+    // eslint-disable-next-line no-console
     console.log('start download from', url)
     setDownloadProgress(0)
     const response = await fetch(url)
     const fullSize = response.headers.get('content-length')
-    const reader = response.body!.getReader()
+    const reader = response.body?.getReader()
+    if (!reader) {
+      throw new Error('ReadableStream not supported')
+    }
     const total: Uint8Array[] = []
     let downloaded = 0
+    const totalSize = fullSize ? parseInt(fullSize, 10) : 0
 
-    while (true) {
-      const { done, value } = await reader.read()
+    let done = false
+    while (!done) {
+      const result = await reader.read()
+      done = result.done
+      const { value } = result
 
       if (done) {
         break
@@ -101,7 +113,9 @@ export async function downloadModel(
         total.push(value)
       }
 
-      setDownloadProgress((downloaded / Number(fullSize)) * 100)
+      if (totalSize > 0) {
+        setDownloadProgress((downloaded / totalSize) * 100)
+      }
     }
 
     const buffer = new Uint8Array(downloaded)
@@ -118,14 +132,17 @@ export async function downloadModel(
   const model = getModel(modelType)
   try {
     await downloadFromUrl(model.url)
-  } catch (e) {
+  } catch (primaryError) {
     if (model.backupUrl) {
       try {
         await downloadFromUrl(model.backupUrl)
-      } catch (r) {
-        alert(`Failed to download the backup model: ${r}`)
+        return
+      } catch {
+        // Both failed — fall through to throw
       }
     }
-    alert(`Failed to download the model, network problem: ${e}`)
+    throw new Error(
+      'Model download failed. Please check your network connection.'
+    )
   }
 }

@@ -5,6 +5,8 @@ interface ButtonProps {
   className?: string
   icon?: ReactNode
   primary?: boolean
+  disabled?: boolean
+  title?: string
   style?: {
     [key: string]: string
   }
@@ -21,6 +23,8 @@ export default function Button(props: ButtonProps) {
     className,
     icon,
     primary,
+    disabled,
+    title,
     style,
     onClick,
     onDown,
@@ -31,22 +35,26 @@ export default function Button(props: ButtonProps) {
   const [active, setActive] = useState(false)
   let background = ''
   if (primary) {
-    background = 'bg-primary hover:bg-black hover:text-white'
+    background =
+      'bg-primary-400 text-surface hover:bg-primary-500 shadow-sm shadow-primary-400/20'
   }
   if (active) {
-    background = 'bg-black text-white'
+    background = 'bg-primary-500 text-white scale-95'
   }
   if (!primary && !active) {
-    background = 'hover:bg-primary'
+    background = 'hover:bg-surface-100 text-gray-300 hover:text-gray-100'
+  }
+  if (disabled) {
+    background = 'opacity-40 pointer-events-none'
   }
   return (
-    <div
-      role="button"
-      onKeyDown={() => {
-        onDown?.()
-      }}
+    <button
+      type="button"
+      title={title}
+      disabled={disabled}
       onClick={onClick}
       onPointerDown={() => {
+        if (disabled) return
         setActive(true)
         onDown?.()
       }}
@@ -60,9 +68,8 @@ export default function Button(props: ButtonProps) {
       onPointerLeave={() => {
         onLeave?.()
       }}
-      tabIndex={-1}
       className={[
-        'inline-flex space-x-3 py-3 px-5 rounded-md cursor-pointer',
+        'inline-flex items-center gap-2 py-2.5 px-4 rounded-xl cursor-pointer transition-all duration-200 select-none focus-ring text-sm font-medium',
         background,
         className,
       ].join(' ')}
@@ -70,6 +77,6 @@ export default function Button(props: ButtonProps) {
     >
       {icon}
       <span className="whitespace-nowrap select-none">{children}</span>
-    </div>
+    </button>
   )
 }

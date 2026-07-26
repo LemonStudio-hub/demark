@@ -4,7 +4,6 @@
 import cv, { Mat } from 'opencv-ts'
 import { ensureModel } from './cache'
 import { getCapabilities } from './util'
-import type { modelType } from './cache'
 // ort.env.debug = true
 // ort.env.logLevel = 'verbose'
 // ort.env.webgpu.profilingMode = 'default'
@@ -162,6 +161,7 @@ function configEnv(capabilities) {
     }
     ort.env.wasm.proxy = true
   }
+  // eslint-disable-next-line no-console
   console.log('env', ort.env.wasm)
 }
 const resizeMark = (
@@ -198,6 +198,7 @@ export default async function inpaint(
   imageFile: File | HTMLImageElement,
   maskBase64: string
 ) {
+  // eslint-disable-next-line no-console
   console.time('sessionCreate')
   if (!model) {
     const capabilities = await getCapabilities()
@@ -207,7 +208,9 @@ export default async function inpaint(
       executionProviders: [capabilities.webgpu ? 'webgpu' : 'wasm'],
     })
   }
+  // eslint-disable-next-line no-console
   console.timeEnd('sessionCreate')
+  // eslint-disable-next-line no-console
   console.time('preProcess')
 
   const [originalImg, originalMark] = await Promise.all([
@@ -245,12 +248,16 @@ export default async function inpaint(
     [model.inputNames[1]]: maskTensor,
   }
 
+  // eslint-disable-next-line no-console
   console.timeEnd('preProcess')
 
+  // eslint-disable-next-line no-console
   console.time('run')
   const results = await model.run(Feed)
+  // eslint-disable-next-line no-console
   console.timeEnd('run')
 
+  // eslint-disable-next-line no-console
   console.time('postProcess')
   const outsTensor = results[model.outputNames[0]]
   const chwToHwcData = postProcess(
@@ -263,8 +270,10 @@ export default async function inpaint(
     originalImg.width,
     originalImg.height
   )
+  // eslint-disable-next-line no-console
   console.log(imageData, 'imageData')
   const result = imageDataToDataURL(imageData)
+  // eslint-disable-next-line no-console
   console.timeEnd('postProcess')
 
   return result

@@ -1,12 +1,14 @@
 import { useState } from 'react'
+import { UploadIcon } from '@heroicons/react/outline'
 import * as m from '../paraglide/messages'
 
 type FileSelectProps = {
   onSelection: (file: File) => void
+  onError?: (message: string) => void
 }
 
 export default function FileSelect(props: FileSelectProps) {
-  const { onSelection } = props
+  const { onSelection, onError } = props
 
   const [dragHover, setDragHover] = useState(false)
   const [uploadElemId] = useState(`file-upload-${Math.random().toString()}`)
@@ -18,23 +20,23 @@ export default function FileSelect(props: FileSelectProps) {
     // Skip non-image files
     const isImage = file.type.match('image.*')
     if (!isImage) {
+      onError?.(m.unsupported_file())
       return
     }
-    try {
-      // Check if file is larger than 10mb
-      if (file.size > 10 * 1024 * 1024) {
-        throw new Error('file too large')
-      }
-      onSelection(file)
-    } catch (e) {
-      // eslint-disable-next-line
-      alert(`error: ${(e as any).message}`)
+    // Check if file is larger than 10mb
+    if (file.size > 10 * 1024 * 1024) {
+      onError?.(m.file_too_large())
+      return
     }
+    onSelection(file)
   }
 
   async function getFile(entry: any): Promise<File> {
-    return new Promise(resolve => {
-      entry.file((file: File) => resolve(file))
+    return new Promise((resolve, reject) => {
+      entry.file(
+        (file: File) => resolve(file),
+        (err: Error) => reject(err)
+      )
     })
   }
 
@@ -91,21 +93,25 @@ export default function FileSelect(props: FileSelectProps) {
     ev.preventDefault()
     const items = await getAllFileEntries(ev.dataTransfer.items)
     setDragHover(false)
-    onFileSelected(items[0])
+    if (items.length > 0) {
+      onFileSelected(items[0])
+    }
   }
 
   return (
     <label
       htmlFor={uploadElemId}
-      className="block w-full h-full group relative cursor-pointer rounded-md font-medium focus-within:outline-none"
+      className="block w-full h-full group relative cursor-pointer rounded-2xl font-medium focus-within:outline-none"
     >
       <div
         className={[
-          'w-full h-full flex items-center justify-center px-6 pt-5 pb-6 text-xl',
-          'border-4 border-dashed rounded-md',
-          'hover:border-black hover:bg-primary',
-          'text-center',
-          dragHover ? 'border-black bg-primary' : 'bg-gray-100 border-gray-300',
+          'w-full h-full flex flex-col items-center justify-center px-6 pt-5 pb-6',
+          'border-2 border-dashed rounded-2xl',
+          'transition-all duration-300',
+          'text-center group',
+          dragHover
+            ? 'border-primary-400 bg-primary-400/10 scale-[1.02]'
+            : 'bg-surface-50/50 border-surface-200 hover:border-primary-400/50 hover:bg-surface-50',
         ].join(' ')}
         onDrop={handleDrop}
         onDragOver={ev => {
@@ -128,7 +134,13 @@ export default function FileSelect(props: FileSelectProps) {
           }}
           accept="image/png, image/jpeg, image/webp"
         />
-        <p>{m.drop_zone()}</p>
+        <div className="flex flex-col items-center gap-3">
+          <UploadIcon className="w-12 h-12 text-surface-300 group-hover:text-primary-400 transition-colors duration-300" />
+          <p className="text-surface-300 group-hover:text-gray-200 transition-colors duration-300 text-base font-medium">
+            {m.drop_zone()}
+          </p>
+          <p className="text-surface-300/60 text-xs">{m.supported_formats()}</p>
+        </div>
       </div>
     </label>
   )

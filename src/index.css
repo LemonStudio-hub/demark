@@ -1,3 +1,69 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  html {
+    @apply bg-surface text-gray-100 antialiased;
+  }
+  body {
+    @apply overflow-hidden;
+  }
+}
+
+@layer components {
+  .glass {
+    @apply bg-white/5 backdrop-blur-xl border border-white/10;
+  }
+  .glass-dark {
+    @apply bg-black/30 backdrop-blur-xl border border-white/5;
+  }
+  .glass-light {
+    @apply bg-white/80 backdrop-blur-xl border border-white/20 shadow-lg;
+  }
+}
+
+@layer utilities {
+  .text-gradient {
+    @apply bg-clip-text text-transparent bg-gradient-to-r from-primary-400 via-primary-300 to-indigo-400;
+  }
+
+  .scrollbar-thin::-webkit-scrollbar {
+    height: 6px;
+    width: 6px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    @apply bg-transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    @apply bg-surface-200 rounded-full;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    @apply bg-surface-300;
+  }
+
+  .focus-ring {
+    @apply focus:outline-none focus:ring-2 focus:ring-primary-400/50 focus:ring-offset-2 focus:ring-offset-surface;
+  }
+}
+
+@layer components {
+  input[type='range'] {
+    @apply appearance-none h-1.5 bg-surface-100 rounded-full cursor-pointer;
+  }
+  input[type='range']::-webkit-slider-thumb {
+    @apply appearance-none w-4 h-4 rounded-full bg-primary-400 border-2 border-surface shadow-md;
+    transition: transform 0.15s ease, box-shadow 0.15s ease;
+  }
+  input[type='range']::-webkit-slider-thumb:hover {
+    transform: scale(1.25);
+    box-shadow: 0 0 0 4px rgba(129, 140, 248, 0.15);
+  }
+  input[type='range']::-moz-range-thumb {
+    @apply w-4 h-4 rounded-full bg-primary-400 border-2 border-surface;
+  }
+}
+
+::selection {
+  @apply bg-primary-400/30 text-white;
+}
